@@ -27,14 +27,59 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-mingw-w64-x86-64
 
-      - name: Fix zcrypto dependency
+      - name: Install Go dependencies
         run: |
-          # Remove old zcrypto and replace with compatible version
-          go mod edit -dropreplace github.com/zmap/zcrypto
-          go mod edit -require github.com/zmap/zcrypto@v0.0.0-20231219022726-a1f61fb1661c
           go mod tidy
           go mod download
-          echo "Fixed zcrypto dependency"
+
+      - name: Find and patch zcrypto
+        run: |
+          # Find the actual zcrypto module path
+          ZCRYPTO_PATH=$(find $(go env GOPATH)/pkg/mod/github.com/zmap -name "zcrypto@*" -type d | head -1)
+          echo "Found zcrypto at: ${ZCRYPTO_PATH}"
+          
+          # Make it writable
+          chmod -R u+w "${ZCRYPTO_PATH}"
+          
+          # Patch 1: Fix ct/x509/root_windows.go
+          CT_WIN="${ZCRYPTO_PATH}/ct/x509/root_windows.go"
+          if [ -f "${CT_WIN}" ]; then
+            echo "Patching ${CT_WIN}..."
+            sed -i 's/uintptr(unsafe\.Pointer(sslPara))/(syscall.Pointer)(unsafe.Pointer(sslPara))/g' "${CT_WIN}"
+            echo "Patched line:"
+            grep -n "ExtraPolicyPara" "${CT_WIN}"
+          else
+            echo "Warning: ${CT_WIN} not found"
+          fi
+          
+          # Patch 2: Create x509/root_windows.go
+          X509_DIR="${ZCRYPTO_PATH}/x509"
+          X509_WIN="${X509_DIR}/root_windows.go"
+          
+          if [ ! -f "${X509_WIN}" ]; then
+            echo "Creating ${X509_WIN}..."
+            cat > "${X509_WIN}" << 'EOF'
+          package x509
+          
+          func loadSystemRoots() (*CertPool, error) {
+              return &CertPool{systemPool: true}, nil
+          }
+          EOF
+            echo "Created file with content:"
+            cat "${X509_WIN}"
+          else
+            echo "${X509_WIN} already exists"
+          fi
+          
+          # Patch 3: Modify root.go to not call loadSystemRoots for Windows
+          ROOT_GO="${X509_DIR}/root.go"
+          if [ -f "${ROOT_GO}" ]; then
+            echo "Patching ${ROOT_GO}..."
+            # Add build tag to exclude the loadSystemRoots call for Windows
+            sed -i 's/systemRoots, systemRootsErr = loadSystemRoots()/\/\/go:build !windows\n\tsystemRoots, systemRootsErr = loadSystemRoots()/g' "${ROOT_GO}"
+            echo "Patched lines around loadSystemRoots:"
+            grep -n -A 2 -B 2 "loadSystemRoots\|go:build" "${ROOT_GO}"
+          fi
 
       - name: Cross-compile for Windows
         run: |
@@ -42,7 +87,7 @@ jobs:
           CC=x86_64-w64-mingw32-gcc GOOS=windows GOARCH=amd64 CGO_ENABLED=1 \
           go build -v -o zgrab2.exe \
           -ldflags "-extldflags -static" \
-          ./cmd/zgrab2
+          ./cmd/zgrab2 2>&1 | tail -20
           echo "Build complete!"
           file zgrab2.exe
 
@@ -75,7 +120,7 @@ jobs:
             - **Windows (amd64)**: `zgrab2.exe`
 
             Built from commit: ${{ github.sha }}
-            zcrypto version: v0.0.0-20231219022726
+            Patched zcrypto for Windows compatibility
           files: zgrab2.exe
           draft: false
           prerelease: false
