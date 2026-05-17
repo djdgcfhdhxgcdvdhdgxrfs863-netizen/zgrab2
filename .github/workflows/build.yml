@@ -29,6 +29,11 @@ jobs:
           go mod tidy
           go mod download
 
+      - name: Pin zcrypto to compatible version
+        run: |
+          go get github.com/zmap/zcrypto@v0.0.0-20230310154051-c8b263fd8300
+          go mod tidy
+
       - name: Cross-compile for Windows with CGO
         run: |
           echo "Building zgrab2.exe for Windows..."
@@ -68,6 +73,7 @@ jobs:
             - **Windows (amd64)**: `zgrab2.exe`
             
             Built from commit: ${{ github.sha }}
+            Note: zcrypto pinned to v0.0.0-20230310154051 for compatibility
           files: zgrab2.exe
           draft: false
           prerelease: false
