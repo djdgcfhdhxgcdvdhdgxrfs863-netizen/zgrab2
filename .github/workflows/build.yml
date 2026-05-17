@@ -1,4 +1,4 @@
-name: Build Windows EXE with Docker
+name: Build Zgrab2 Windows EXE with Golang Image
 
 on:
   workflow_dispatch:
@@ -10,15 +10,15 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Build zgrab2.exe using official Docker image
+      - name: Build zgrab2.exe using Golang Docker image
         run: |
           docker run --rm \
-            -v "$(pwd)":/build \
-            -w /build \
+            -v "$(pwd)":/app \
+            -w /app \
             -e GOOS=windows \
             -e GOARCH=amd64 \
-            -e CGO_ENABLED=1 \
-            ghcr.io/zmap/zgrab2:latest \
+            -e CGO_ENABLED=0 \
+            golang:1.23-alpine \
             go build -o zgrab2.exe ./cmd/zgrab2
 
       - name: Upload artifact
