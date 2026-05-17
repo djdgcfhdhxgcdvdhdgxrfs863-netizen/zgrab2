@@ -1,78 +1,28 @@
-name: Build Zgrab2 Windows Binary
+name: Build Windows EXE with Docker
 
 on:
   workflow_dispatch:
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true  
-
 jobs:
   build:
     runs-on: ubuntu-latest
-    
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.23"
-
-      - name: Install cross-compiler for Windows
+      - name: Build zgrab2.exe using official Docker image
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-mingw-w64-x86-64
-
-      - name: Fix zcrypto version in go.mod
-        run: |
-          go mod edit -replace github.com/zmap/zcrypto=github.com/zmap/zcrypto@v0.0.0-20230310154051-c8b263fd8300
-          # حالا dependencies رو آپدیت کن
-          go mod tidy
-          go mod download
-
-      - name: Cross-compile for Windows with CGO
-        run: |
-          echo "Building zgrab2.exe for Windows..."
-          CC=x86_64-w64-mingw32-gcc GOOS=windows GOARCH=amd64 CGO_ENABLED=1 \
-          go build -o zgrab2.exe \
-          -ldflags "-extldflags -static" \
-          ./cmd/zgrab2
-          echo "Build complete!"
-          file zgrab2.exe
+          docker run --rm \
+            -v "$(pwd)":/build \
+            -w /build \
+            -e GOOS=windows \
+            -e GOARCH=amd64 \
+            -e CGO_ENABLED=1 \
+            ghcr.io/zmap/zgrab2:latest \
+            go build -o zgrab2.exe ./cmd/zgrab2
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: zgrab2-windows-amd64
+          name: zgrab2-windows-exe
           path: zgrab2.exe
-          retention-days: 30
-
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: zgrab2-windows-amd64
-          path: .
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: "v${{ github.run_number }}"
-          name: "ZGrab2 Windows Release v${{ github.run_number }}"
-          body: |
-            🚀 Auto-built ZGrab2 Windows binary
-            
-            ### Available Binary:
-            - **Windows (amd64)**: `zgrab2.exe`
-            
-            Built from commit: ${{ github.sha }}
-            zcrypto replaced with v0.0.0-20230310154051 for Windows compatibility
-          files: zgrab2.exe
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
