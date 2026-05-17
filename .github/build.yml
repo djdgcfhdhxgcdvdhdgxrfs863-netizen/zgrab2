@@ -1,4 +1,4 @@
-name: Build Zgrab2 Binaries
+name: Build Zgrab02 Binaries
 
 on:
   push:
