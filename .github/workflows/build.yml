@@ -1,47 +1,123 @@
-name: Build Masscan Windows EXE
+name: Build Zgrab2 Windows Binary
 
 on:
   workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 permissions:
   contents: write
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install MSYS2
-        uses: msys2/setup-msys2@v2
+      - name: Set up Go
+        uses: actions/setup-go@v5
         with:
-          update: true
-          install: >
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-make
-            git
+          go-version: "1.23"
 
-      - name: Clone Masscan
-        shell: bash
+      - name: Install cross-compiler for Windows
         run: |
-          git clone https://github.com/robertdavidgraham/masscan.git
-          cd masscan
-          make
+          sudo apt-get update
+          sudo apt-get install -y gcc-mingw-w64-x86-64
 
-      - name: Upload EXE to Release
+      - name: Install Go dependencies
+        run: |
+          go mod tidy
+          go mod download
+
+      - name: Patch zcrypto for Windows cross-compilation
+        run: |
+          ZCRYPTO_PATH=$(go env GOPATH)/pkg/mod/github.com/zmap/zcrypto@v0.0.0-20260514033604-a1159eb3cad9
+          chmod -R u+w "${ZCRYPTO_PATH}"
+
+          # Patch 1: ct/x509/root_windows.go - Fix uintptr to syscall.Pointer
+          CT_WIN="${ZCRYPTO_PATH}/ct/x509/root_windows.go"
+          if [ -f "${CT_WIN}" ]; then
+            sed -i \
+              's/ExtraPolicyPara: uintptr(unsafe\.Pointer(sslPara))/ExtraPolicyPara: (syscall.Pointer)(unsafe.Pointer(sslPara))/g' \
+              "${CT_WIN}"
+            echo "Patched ct/x509/root_windows.go:"
+            grep -n "ExtraPolicyPara" "${CT_WIN}" || echo "  No ExtraPolicyPara found"
+          else
+            echo "Warning: ct/x509/root_windows.go not found at ${CT_WIN}"
+          fi
+
+          # Patch 2: x509/root_windows.go - Add missing loadSystemRoots function
+          X509_WIN="${ZCRYPTO_PATH}/x509/root_windows.go"
+          if [ ! -f "${X509_WIN}" ] || ! grep -q "func loadSystemRoots" "${X509_WIN}"; then
+            cat > "${X509_WIN}" << 'GOEOF'
+          // Copyright 2012 The Go Authors. All rights reserved.
+          // Use of this source code is governed by a BSD-style
+          // license that can be found in the LICENSE file.
+
+          //go:build windows
+          // +build windows
+
+          package x509
+
+          func loadSystemRoots() (*CertPool, error) {
+              return &CertPool{systemPool: true}, nil
+          }
+          GOEOF
+            echo "Created x509/root_windows.go with loadSystemRoots:"
+            cat "${X509_WIN}"
+          else
+            echo "Patched existing x509/root_windows.go:"
+            sed -i \
+              's/ExtraPolicyPara: uintptr(unsafe\.Pointer(sslPara))/ExtraPolicyPara: (syscall.Pointer)(unsafe.Pointer(sslPara))/g' \
+              "${X509_WIN}"
+            grep -n "ExtraPolicyPara\|func loadSystemRoots" "${X509_WIN}"
+          fi
+
+      - name: Cross-compile for Windows with CGO
+        run: |
+          echo "Building zgrab2.exe for Windows..."
+          CC=x86_64-w64-mingw32-gcc GOOS=windows GOARCH=amd64 CGO_ENABLED=1 \
+          go build -o zgrab2.exe \
+          -ldflags "-extldflags -static" \
+          ./cmd/zgrab2
+          echo "Build complete!"
+          file zgrab2.exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zgrab2-windows-amd64
+          path: zgrab2.exe
+          retention-days: 30
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: zgrab2-windows-amd64
+          path: .
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: "masscan-windows-${{ github.run_number }}"
-          name: "Masscan Windows Build ${{ github.run_number }}"
+          tag_name: "v${{ github.run_number }}"
+          name: "ZGrab2 Windows Release v${{ github.run_number }}"
           body: |
-            🚀 Masscan Windows Binary
-            
+            🚀 Auto-built ZGrab2 Windows binary
+
             ### Available Binary:
-            - **Windows**: `masscan.exe`
-            
-            Built from: https://github.com/robertdavidgraham/masscan
-          files: masscan/bin/masscan.exe
+            - **Windows (amd64)**: `zgrab2.exe`
+
+            Built from commit: ${{ github.sha }}
+            Patched zcrypto for Windows compatibility
+          files: zgrab2.exe
+          draft: false
+          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
