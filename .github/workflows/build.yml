@@ -1,31 +1,131 @@
-name: Build Zgrab2 Windows EXE
+name: Build Zgrab2 Windows Binary
 
 on:
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Fix zcrypto and build with Docker
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Install cross-compiler for Windows
         run: |
-          docker run --rm \
-            -v "$(pwd)":/app \
-            -w /app \
-            golang:alpine \
-            sh -c '
-              echo "Replacing zcrypto with compatible version..."
-              go mod edit -replace github.com/zmap/zcrypto=github.com/zmap/zcrypto@v0.0.0-20231219022726-a1f61fb1661c
-              go mod tidy
-              echo "Building for Windows..."
-              GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o zgrab2.exe ./cmd/zgrab2
-            '
+          sudo apt-get update
+          sudo apt-get install -y gcc-mingw-w64-x86-64
+
+      - name: Install Go dependencies
+        run: |
+          go mod tidy
+          go mod download
+
+      - name: Patch zcrypto for Windows cross-compilation
+        run: |
+          ZCRYPTO_PATH=$(go env GOPATH)/pkg/mod/github.com/zmap/zcrypto@v0.0.0-20260514033604-a1159eb3cad9
+
+          echo "=== Patching ct/x509/root_windows.go (ExtraPolicyPara cast) ==="
+          CT_WIN="${ZCRYPTO_PATH}/ct/x509/root_windows.go"
+          # فایل read-only هست، باید permission بدیم
+          chmod -R u+w "${ZCRYPTO_PATH}"
+
+          # باگ: uintptr(unsafe.Pointer(sslPara)) باید (syscall.Pointer)(unsafe.Pointer(sslPara)) بشه
+          sed -i 's/ExtraPolicyPara: uintptr(unsafe\.Pointer(sslPara))/ExtraPolicyPara: (syscall.Pointer)(unsafe.Pointer(sslPara))/g' "${CT_WIN}"
+          echo "ct/x509/root_windows.go patched:"
+          grep -n "ExtraPolicyPara" "${CT_WIN}"
+
+          echo "=== Patching x509/root.go (loadSystemRoots for Windows) ==="
+          X509_ROOT="${ZCRYPTO_PATH}/x509/root.go"
+          X509_WIN="${ZCRYPTO_PATH}/x509/root_windows.go"
+
+          # بررسی اینکه آیا root_windows.go وجود داره و loadSystemRoots داره
+          if [ ! -f "${X509_WIN}" ]; then
+            echo "root_windows.go وجود نداره، می‌سازیم..."
+            cat > "${X509_WIN}" << 'GOFILE'
+          // Copyright 2012 The Go Authors. All rights reserved.
+          // Use of this source code is governed by a BSD-style
+          // license that can be found in the LICENSE file.
+
+          package x509
+
+          func loadSystemRoots() (*CertPool, error) {
+          	return &CertPool{systemPool: true}, nil
+          }
+          GOFILE
+          else
+            # اگه فایل هست ولی loadSystemRoots نداره
+            if ! grep -q "func loadSystemRoots" "${X509_WIN}"; then
+              echo "loadSystemRoots وجود نداره در root_windows.go، اضافه می‌کنیم..."
+              echo "" >> "${X509_WIN}"
+              echo "func loadSystemRoots() (*CertPool, error) {" >> "${X509_WIN}"
+              echo "	return &CertPool{systemPool: true}, nil" >> "${X509_WIN}"
+              echo "}" >> "${X509_WIN}"
+            else
+              echo "root_windows.go و loadSystemRoots موجوده، بررسی ExtraPolicyPara..."
+              if grep -q "uintptr(unsafe.Pointer(sslPara))" "${X509_WIN}"; then
+                sed -i 's/ExtraPolicyPara: uintptr(unsafe\.Pointer(sslPara))/ExtraPolicyPara: (syscall.Pointer)(unsafe.Pointer(sslPara))/g' "${X509_WIN}"
+                echo "x509/root_windows.go هم patch شد"
+              fi
+            fi
+          fi
+
+          # بررسی root.go: اگه loadSystemRoots بدون build tag برای windows تعریف نشده
+          # (یعنی فقط linux/darwin داره)، باید مطمئن بشیم تعارض نباشه
+          echo "=== بررسی نهایی ==="
+          grep -n "loadSystemRoots" "${X509_ROOT}" || true
+          grep -n "loadSystemRoots" "${X509_WIN}" || true
+          echo "Patch کامل شد!"
+
+      - name: Cross-compile for Windows with CGO
+        run: |
+          echo "Building zgrab2.exe for Windows..."
+          CC=x86_64-w64-mingw32-gcc GOOS=windows GOARCH=amd64 CGO_ENABLED=1 \
+          go build -o zgrab2.exe \
+          -ldflags "-extldflags -static" \
+          ./cmd/zgrab2
+          echo "Build complete!"
+          file zgrab2.exe
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: zgrab2-windows-exe
+          name: zgrab2-windows-amd64
           path: zgrab2.exe
+          retention-days: 30
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: zgrab2-windows-amd64
+          path: .
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: "v${{ github.run_number }}"
+          name: "ZGrab2 Windows Release v${{ github.run_number }}"
+          body: |
+            🚀 Auto-built ZGrab2 Windows binary
+
+            ### Available Binary:
+            - **Windows (amd64)**: `zgrab2.exe`
+
+            Built from commit: ${{ github.sha }}
+          files: zgrab2.exe
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
