@@ -3,6 +3,9 @@ name: Build and Release Zgrab2 Binaries
 on:
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true  
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -20,6 +23,11 @@ jobs:
         with:
           go-version: ${{ matrix.go-version }}
 
+      - name: Install dependencies
+        run: |
+          go mod tidy
+          go mod download
+
       - name: Build binary
         run: |
           echo "Building for ${{ matrix.os }}"
@@ -36,7 +44,7 @@ jobs:
           else
             mv zgrab2 release/zgrab2-linux
 
-      - name: Upload artifact for workflow
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: zgrab2-${{ matrix.os }}
