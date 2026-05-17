@@ -56,29 +56,25 @@ jobs:
           X509_DIR="${ZCRYPTO_PATH}/x509"
           X509_WIN="${X509_DIR}/root_windows.go"
           
-          if [ ! -f "${X509_WIN}" ]; then
-            echo "Creating ${X509_WIN}..."
-            cat > "${X509_WIN}" << 'EOF'
+          echo "Creating ${X509_WIN}..."
+          cat > "${X509_WIN}" << 'EOF'
           package x509
           
           func loadSystemRoots() (*CertPool, error) {
               return &CertPool{systemPool: true}, nil
           }
           EOF
-            echo "Created file with content:"
-            cat "${X509_WIN}"
-          else
-            echo "${X509_WIN} already exists"
-          fi
+          echo "Created file with content:"
+          cat "${X509_WIN}"
           
-          # Patch 3: Modify root.go to not call loadSystemRoots for Windows
+          # Patch 3: Fix root.go - remove the problematic line
           ROOT_GO="${X509_DIR}/root.go"
           if [ -f "${ROOT_GO}" ]; then
             echo "Patching ${ROOT_GO}..."
-            # Add build tag to exclude the loadSystemRoots call for Windows
-            sed -i 's/systemRoots, systemRootsErr = loadSystemRoots()/\/\/go:build !windows\n\tsystemRoots, systemRootsErr = loadSystemRoots()/g' "${ROOT_GO}"
+            # Replace the line that calls loadSystemRoots with a conditional
+            sed -i 's|systemRoots, systemRootsErr = loadSystemRoots()|if runtime.GOOS != "windows" { systemRoots, systemRootsErr = loadSystemRoots() }|g' "${ROOT_GO}"
             echo "Patched lines around loadSystemRoots:"
-            grep -n -A 2 -B 2 "loadSystemRoots\|go:build" "${ROOT_GO}"
+            grep -n -A 2 -B 2 "loadSystemRoots" "${ROOT_GO}"
           fi
 
       - name: Cross-compile for Windows
@@ -87,9 +83,19 @@ jobs:
           CC=x86_64-w64-mingw32-gcc GOOS=windows GOARCH=amd64 CGO_ENABLED=1 \
           go build -v -o zgrab2.exe \
           -ldflags "-extldflags -static" \
-          ./cmd/zgrab2 2>&1 | tail -20
-          echo "Build complete!"
-          file zgrab2.exe
+          ./cmd/zgrab2 2>&1 | grep -E "error|Error|zgrab2\.exe" || true
+          
+          if [ -f "zgrab2.exe" ]; then
+            echo "Build successful!"
+            file zgrab2.exe
+          else
+            echo "Build failed, checking for errors..."
+            # Try building without verbose to see full error
+            CC=x86_64-w64-mingw32-gcc GOOS=windows GOARCH=amd64 CGO_ENABLED=1 \
+            go build -o zgrab2.exe \
+            -ldflags "-extldflags -static" \
+            ./cmd/zgrab2
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
