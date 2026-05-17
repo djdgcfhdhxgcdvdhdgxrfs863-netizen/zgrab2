@@ -32,58 +32,34 @@ jobs:
       - name: Patch zcrypto for Windows cross-compilation
         run: |
           ZCRYPTO_PATH=$(go env GOPATH)/pkg/mod/github.com/zmap/zcrypto@v0.0.0-20260514033604-a1159eb3cad9
-
-          echo "=== Patching ct/x509/root_windows.go (ExtraPolicyPara cast) ==="
-          CT_WIN="${ZCRYPTO_PATH}/ct/x509/root_windows.go"
-          # فایل read-only هست، باید permission بدیم
           chmod -R u+w "${ZCRYPTO_PATH}"
 
-          # باگ: uintptr(unsafe.Pointer(sslPara)) باید (syscall.Pointer)(unsafe.Pointer(sslPara)) بشه
-          sed -i 's/ExtraPolicyPara: uintptr(unsafe\.Pointer(sslPara))/ExtraPolicyPara: (syscall.Pointer)(unsafe.Pointer(sslPara))/g' "${CT_WIN}"
-          echo "ct/x509/root_windows.go patched:"
+          # ── patch 1: ct/x509/root_windows.go ──────────────────────────
+          # uintptr(unsafe.Pointer(...))  →  (syscall.Pointer)(unsafe.Pointer(...))
+          CT_WIN="${ZCRYPTO_PATH}/ct/x509/root_windows.go"
+          sed -i \
+            's/ExtraPolicyPara: uintptr(unsafe\.Pointer(sslPara))/ExtraPolicyPara: (syscall.Pointer)(unsafe.Pointer(sslPara))/g' \
+            "${CT_WIN}"
+          echo "ct/x509/root_windows.go:"
           grep -n "ExtraPolicyPara" "${CT_WIN}"
 
-          echo "=== Patching x509/root.go (loadSystemRoots for Windows) ==="
-          X509_ROOT="${ZCRYPTO_PATH}/x509/root.go"
+          # ── patch 2: x509/root_windows.go ─────────────────────────────
+          # این فایل وجود نداره؛ loadSystemRoots برای ویندوز تعریف نشده
           X509_WIN="${ZCRYPTO_PATH}/x509/root_windows.go"
-
-          # بررسی اینکه آیا root_windows.go وجود داره و loadSystemRoots داره
-          if [ ! -f "${X509_WIN}" ]; then
-            echo "root_windows.go وجود نداره، می‌سازیم..."
-            cat > "${X509_WIN}" << 'GOFILE'
-          // Copyright 2012 The Go Authors. All rights reserved.
-          // Use of this source code is governed by a BSD-style
-          // license that can be found in the LICENSE file.
-
-          package x509
-
-          func loadSystemRoots() (*CertPool, error) {
-          	return &CertPool{systemPool: true}, nil
-          }
-          GOFILE
+          if [ ! -f "${X509_WIN}" ] || ! grep -q "func loadSystemRoots" "${X509_WIN}"; then
+            printf '// Copyright 2012 The Go Authors. All rights reserved.\n// Use of this source code is governed by a BSD-style\n// license that can be found in the LICENSE file.\n\n//go:build windows\n// +build windows\n\npackage x509\n\nfunc loadSystemRoots() (*CertPool, error) {\n\treturn &CertPool{systemPool: true}, nil\n}\n' \
+              > "${X509_WIN}"
+            echo "x509/root_windows.go ساخته شد:"
+            cat "${X509_WIN}"
           else
-            # اگه فایل هست ولی loadSystemRoots نداره
-            if ! grep -q "func loadSystemRoots" "${X509_WIN}"; then
-              echo "loadSystemRoots وجود نداره در root_windows.go، اضافه می‌کنیم..."
-              echo "" >> "${X509_WIN}"
-              echo "func loadSystemRoots() (*CertPool, error) {" >> "${X509_WIN}"
-              echo "	return &CertPool{systemPool: true}, nil" >> "${X509_WIN}"
-              echo "}" >> "${X509_WIN}"
-            else
-              echo "root_windows.go و loadSystemRoots موجوده، بررسی ExtraPolicyPara..."
-              if grep -q "uintptr(unsafe.Pointer(sslPara))" "${X509_WIN}"; then
-                sed -i 's/ExtraPolicyPara: uintptr(unsafe\.Pointer(sslPara))/ExtraPolicyPara: (syscall.Pointer)(unsafe.Pointer(sslPara))/g' "${X509_WIN}"
-                echo "x509/root_windows.go هم patch شد"
-              fi
-            fi
+            sed -i \
+              's/ExtraPolicyPara: uintptr(unsafe\.Pointer(sslPara))/ExtraPolicyPara: (syscall.Pointer)(unsafe.Pointer(sslPara))/g' \
+              "${X509_WIN}"
+            echo "x509/root_windows.go موجود بود، patch اعمال شد."
           fi
 
-          # بررسی root.go: اگه loadSystemRoots بدون build tag برای windows تعریف نشده
-          # (یعنی فقط linux/darwin داره)، باید مطمئن بشیم تعارض نباشه
           echo "=== بررسی نهایی ==="
-          grep -n "loadSystemRoots" "${X509_ROOT}" || true
-          grep -n "loadSystemRoots" "${X509_WIN}" || true
-          echo "Patch کامل شد!"
+          grep -n "^package\|^func load\|^//go:build" "${X509_WIN}"
 
       - name: Cross-compile for Windows with CGO
         run: |
