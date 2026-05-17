@@ -32,55 +32,61 @@ jobs:
           go mod tidy
           go mod download
 
-      - name: Patch zcrypto for Windows cross-compilation
+      - name: Find zcrypto module path
+        id: find-path
         run: |
           ZCRYPTO_PATH=$(go env GOPATH)/pkg/mod/github.com/zmap/zcrypto@v0.0.0-20260514033604-a1159eb3cad9
+          echo "ZCRYPTO_PATH=${ZCRYPTO_PATH}" >> $GITHUB_ENV
+          echo "Found zcrypto at: ${ZCRYPTO_PATH}"
+          ls -la "${ZCRYPTO_PATH}/x509/" | head -20
+
+      - name: Patch zcrypto source files
+        run: |
           chmod -R u+w "${ZCRYPTO_PATH}"
 
-          # Patch 1: ct/x509/root_windows.go - Fix uintptr to syscall.Pointer
+          # Patch 1: Fix ct/x509/root_windows.go
           CT_WIN="${ZCRYPTO_PATH}/ct/x509/root_windows.go"
           if [ -f "${CT_WIN}" ]; then
-            sed -i \
-              's/ExtraPolicyPara: uintptr(unsafe\.Pointer(sslPara))/ExtraPolicyPara: (syscall.Pointer)(unsafe.Pointer(sslPara))/g' \
-              "${CT_WIN}"
-            echo "Patched ct/x509/root_windows.go:"
-            grep -n "ExtraPolicyPara" "${CT_WIN}" || echo "  No ExtraPolicyPara found"
-          else
-            echo "Warning: ct/x509/root_windows.go not found at ${CT_WIN}"
+            sed -i 's/uintptr(unsafe\.Pointer(sslPara))/(syscall.Pointer)(unsafe.Pointer(sslPara))/g' "${CT_WIN}"
+            echo "=== Patched ct/x509/root_windows.go ==="
+            grep -n "ExtraPolicyPara" "${CT_WIN}"
           fi
 
-          # Patch 2: x509/root_windows.go - Add missing loadSystemRoots function
+          # Patch 2: Fix x509/root.go to use build tags properly
+          ROOT_GO="${ZCRYPTO_PATH}/x509/root.go"
+          if [ -f "${ROOT_GO}" ] && grep -q "loadSystemRoots" "${ROOT_GO}"; then
+            # Add windows build tag exclusion to the problematic line
+            sed -i 's|func loadSystemRoots()|//go:build !windows\nfunc loadSystemRoots()|g' "${ROOT_GO}"
+            echo "=== Patched x509/root.go ==="
+            grep -n "loadSystemRoots\|go:build" "${ROOT_GO}"
+          fi
+
+          # Patch 3: Create x509/root_windows.go if not exists
           X509_WIN="${ZCRYPTO_PATH}/x509/root_windows.go"
-          if [ ! -f "${X509_WIN}" ] || ! grep -q "func loadSystemRoots" "${X509_WIN}"; then
+          if [ ! -f "${X509_WIN}" ]; then
             cat > "${X509_WIN}" << 'GOEOF'
-          // Copyright 2012 The Go Authors. All rights reserved.
-          // Use of this source code is governed by a BSD-style
-          // license that can be found in the LICENSE file.
-
-          //go:build windows
-          // +build windows
-
           package x509
 
           func loadSystemRoots() (*CertPool, error) {
               return &CertPool{systemPool: true}, nil
           }
           GOEOF
-            echo "Created x509/root_windows.go with loadSystemRoots:"
+            echo "=== Created x509/root_windows.go ==="
             cat "${X509_WIN}"
-          else
-            echo "Patched existing x509/root_windows.go:"
-            sed -i \
-              's/ExtraPolicyPara: uintptr(unsafe\.Pointer(sslPara))/ExtraPolicyPara: (syscall.Pointer)(unsafe.Pointer(sslPara))/g' \
-              "${X509_WIN}"
-            grep -n "ExtraPolicyPara\|func loadSystemRoots" "${X509_WIN}"
           fi
+
+      - name: Verify patches
+        run: |
+          echo "=== Checking all loadSystemRoots references ==="
+          grep -r "loadSystemRoots" "${ZCRYPTO_PATH}/x509/"
+          echo "=== File listing ==="
+          ls -la "${ZCRYPTO_PATH}/x509/root*.go"
 
       - name: Cross-compile for Windows with CGO
         run: |
           echo "Building zgrab2.exe for Windows..."
           CC=x86_64-w64-mingw32-gcc GOOS=windows GOARCH=amd64 CGO_ENABLED=1 \
-          go build -o zgrab2.exe \
+          go build -v -o zgrab2.exe \
           -ldflags "-extldflags -static" \
           ./cmd/zgrab2
           echo "Build complete!"
