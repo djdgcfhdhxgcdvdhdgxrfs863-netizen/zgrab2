@@ -24,15 +24,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-mingw-w64-x86-64
 
-      - name: Install Go dependencies
+      - name: Fix zcrypto version in go.mod
         run: |
+          go mod edit -replace github.com/zmap/zcrypto=github.com/zmap/zcrypto@v0.0.0-20230310154051-c8b263fd8300
+          # حالا dependencies رو آپدیت کن
           go mod tidy
           go mod download
-
-      - name: Pin zcrypto to compatible version
-        run: |
-          go get github.com/zmap/zcrypto@v0.0.0-20230310154051-c8b263fd8300
-          go mod tidy
 
       - name: Cross-compile for Windows with CGO
         run: |
@@ -73,7 +70,7 @@ jobs:
             - **Windows (amd64)**: `zgrab2.exe`
             
             Built from commit: ${{ github.sha }}
-            zcrypto pinned to v0.0.0-20230310154051 for Windows compatibility
+            zcrypto replaced with v0.0.0-20230310154051 for Windows compatibility
           files: zgrab2.exe
           draft: false
           prerelease: false
