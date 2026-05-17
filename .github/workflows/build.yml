@@ -1,20 +1,21 @@
-name: Build and Release Zgrab2 Linux Binary
+name: Build Zgrab2 Windows Binary
 
 on:
-  workflow_dispatch:  # اجرا با دکمه Run
+  workflow_dispatch:
 
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true  # رفع هشدار Node.js 20
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true  
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
           go-version: "1.23"
 
@@ -23,19 +24,18 @@ jobs:
           go mod tidy
           go mod download
 
-      - name: Build Linux binary
+      - name: Cross-compile for Windows
         run: |
-          echo "Building zgrab2-linux"
-          GOOS=linux GOARCH=amd64 go build -o zgrab2-linux ./cmd/zgrab2
+          echo "Building zgrab2.exe for Windows..."
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o zgrab2.exe ./cmd/zgrab2
+          echo "Build complete!"
 
-      - name: Prepare artifact
-        run: mkdir -p release && mv zgrab2-linux release/
-
-      - name: Upload artifact for workflow
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: zgrab2-linux
-          path: release/zgrab2-linux
+          name: zgrab2-windows-amd64
+          path: zgrab2.exe
+          retention-days: 30
 
   release:
     needs: build
@@ -44,21 +44,23 @@ jobs:
       - name: Download artifact
         uses: actions/download-artifact@v4
         with:
-          path: release
+          name: zgrab2-windows-amd64
+          path: .
 
       - name: Create GitHub Release
-        id: create_release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: "v${{ github.run_number }}"
-          name: "ZGrab2 Linux Release ${{ github.run_number }}"
-          body: "Auto-built ZGrab2 Linux binary."
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload binary to Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: release/*
+          name: "ZGrab2 Windows Release v${{ github.run_number }}"
+          body: |
+            🚀 Auto-built ZGrab2 Windows binary
+            
+            ### Available Binary:
+            - **Windows (amd64)**: `zgrab2.exe`
+            
+            Built from commit: ${{ github.sha }}
+          files: zgrab2.exe
+          draft: false
+          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
