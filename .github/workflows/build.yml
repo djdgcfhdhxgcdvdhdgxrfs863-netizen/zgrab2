@@ -1,27 +1,22 @@
-name: Build and Release Zgrab2 Binaries
+name: Build and Release Zgrab2 Linux Binary
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # اجرا با دکمه Run
 
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true  
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true  # رفع هشدار Node.js 20
 
 jobs:
   build:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-        go-version: ["1.23"]
-    runs-on: ${{ matrix.os }}
-    
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v4
         with:
-          go-version: ${{ matrix.go-version }}
+          go-version: "1.23"
 
       - name: Install dependencies
         run: |
@@ -29,68 +24,41 @@ jobs:
           go mod download
 
       - name: Build Linux binary
-        if: runner.os == 'Linux'
         run: |
-          echo "Building for Linux"
-          go build -o zgrab2 ./cmd/zgrab2
-          mkdir -p release
-          mv zgrab2 release/zgrab2-linux-amd64
+          echo "Building zgrab2-linux"
+          GOOS=linux GOARCH=amd64 go build -o zgrab2-linux ./cmd/zgrab2
 
-      - name: Build Windows binary
-        if: runner.os == 'Windows'
-        run: |
-          echo "Building for Windows"
-          go build -o zgrab2.exe ./cmd/zgrab2
-          mkdir -p release
-          mv zgrab2.exe release/zgrab2-windows-amd64.exe
-        shell: bash
+      - name: Prepare artifact
+        run: mkdir -p release && mv zgrab2-linux release/
 
-      - name: Upload artifact
+      - name: Upload artifact for workflow
         uses: actions/upload-artifact@v4
         with:
-          name: zgrab2-${{ runner.os }}-${{ runner.arch }}
-          path: release/
-          retention-days: 30
+          name: zgrab2-linux
+          path: release/zgrab2-linux
 
   release:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Download Linux artifact
+      - name: Download artifact
         uses: actions/download-artifact@v4
         with:
-          name: zgrab2-Linux-X64
-          path: release/linux
-
-      - name: Download Windows artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: zgrab2-Windows-X64
-          path: release/windows
-
-      - name: Prepare files for release
-        run: |
-          mkdir -p final-release
-          cp release/linux/zgrab2-linux-amd64 final-release/
-          cp release/windows/zgrab2-windows-amd64.exe final-release/
-          ls -la final-release/
+          path: release
 
       - name: Create GitHub Release
+        id: create_release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: "v${{ github.run_number }}"
-          name: "ZGrab2 Release v${{ github.run_number }}"
-          body: |
-            🚀 Auto-built ZGrab2 binaries
-            
-            ### Available Binaries:
-            - **Linux (amd64)**: `zgrab2-linux-amd64`
-            - **Windows (amd64)**: `zgrab2-windows-amd64.exe`
-            
-            Built from commit: ${{ github.sha }}
-          files: |
-            final-release/*
-          draft: false
-          prerelease: false
+          name: "ZGrab2 Linux Release ${{ github.run_number }}"
+          body: "Auto-built ZGrab2 Linux binary."
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload binary to Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: release/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
