@@ -19,16 +19,25 @@ jobs:
         with:
           go-version: "1.23"
 
-      - name: Install dependencies
+      - name: Install cross-compiler for Windows
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-mingw-w64-x86-64
+
+      - name: Install Go dependencies
         run: |
           go mod tidy
           go mod download
 
-      - name: Cross-compile for Windows
+      - name: Cross-compile for Windows with CGO
         run: |
           echo "Building zgrab2.exe for Windows..."
-          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o zgrab2.exe ./cmd/zgrab2
+          CC=x86_64-w64-mingw32-gcc GOOS=windows GOARCH=amd64 CGO_ENABLED=1 \
+          go build -o zgrab2.exe \
+          -ldflags "-extldflags -static" \
+          ./cmd/zgrab2
           echo "Build complete!"
+          file zgrab2.exe
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
