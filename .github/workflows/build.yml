@@ -10,16 +10,19 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Build zgrab2.exe using latest Golang image
+      - name: Fix zcrypto and build with Docker
         run: |
           docker run --rm \
             -v "$(pwd)":/app \
             -w /app \
-            -e GOOS=windows \
-            -e GOARCH=amd64 \
-            -e CGO_ENABLED=0 \
             golang:alpine \
-            go build -o zgrab2.exe ./cmd/zgrab2
+            sh -c '
+              echo "Replacing zcrypto with compatible version..."
+              go mod edit -replace github.com/zmap/zcrypto=github.com/zmap/zcrypto@v0.0.0-20231219022726-a1f61fb1661c
+              go mod tidy
+              echo "Building for Windows..."
+              GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o zgrab2.exe ./cmd/zgrab2
+            '
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
