@@ -73,7 +73,7 @@ jobs:
             - **Windows (amd64)**: `zgrab2.exe`
             
             Built from commit: ${{ github.sha }}
-            Note: zcrypto pinned to v0.0.0-20230310154051 for compatibility
+            zcrypto pinned to v0.0.0-20230310154051 for Windows compatibility
           files: zgrab2.exe
           draft: false
           prerelease: false
